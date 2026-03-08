@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 应用生成器</title>
+    <!-- 预连接 Turnstile -->
+    <link rel="preconnect" href="https://challenges.cloudflare.com">
+    <!-- Material Icons & Font Awesome -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Turnstile 脚本（显式渲染） -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+    <style>
+        /* 样式略 */
+    </style>
+</head>
+
+<body>
+    <!-- 初始加载遮罩 -->
+    <div id="initial-loader"
+        style="position: fixed; top:0; left:0; width:100%; height:100%; background: #F8F8F8; display: flex; align-items: center; justify-content: center; z-index: 20000;">
+        <div style="text-align: center;">
+            <div
+                style="border: 4px solid #e0e0e0; border-top: 4px solid #005EEB; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 16px;">
+            </div>
+            <div style="color: #333;">加载中，请稍候...</div>
+        </div>
+    </div>
+
+    <!-- 主内容容器 -->
+    <div id="app-content" style="display: none;" x-data="app" x-cloak>
+        <!-- 全局加载遮罩 -->
+        <div x-show="$store.app.loading" class="loading-overlay">
+            <div class="loading-dialog">
+                <div class="loading-spinner"></div>
+                <div x-text="$store.app.loadingMessage" class="md-font-medium"></div>
+            </div>
+        </div>
+
+        <div x-show="$store.app.downloadModalVisible" class="loading-overlay"
+            @click.self="$store.app.closeDownloadModal()">
+            <div class="download-modal">
+                <h2><i class="fas fa-exclamation-triangle" style="color: var(--md-error);"></i> 服务告知</h2>
+                <div class="notice-content">
+                    <p><strong>风险提示</strong></p>
+                    <ul>
+                        <li>本项目（AI应用生成工具）属于技术探究与测试项目，生成的产品<strong>仅供个人学习与评估使用</strong>。</li>
+                        <li>由于是探究性项目，生成的产品可能存在<strong>未知安全漏洞、数据泄露风险、功能缺陷等隐患</strong>，<strong>请勿用于任何正式生产环境或处理敏感信息</strong>。
+                        </li>
+                        <li>受有限资源限制，生成产品中集成的云端能力（如存储、数据库等）并非无限使用。当云存储的数据量或请求频率超过一定阈值后，相关云端功能可能会被<strong>自动冻结</strong>。
+                        </li>
+                        <li>继续操作意味着您确认已了解上述风险，并自行承担使用后果。</li>
+                    </ul>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: flex-end; gap: 16px;">
+                    <span class="countdown-text" x-show="$store.app.downloadCountdown > 0"
+                        x-text="'请阅读 ' + $store.app.downloadCountdown + ' 秒'"></span>
+                    <button class="button button-outline" @click="$store.app.closeDownloadModal()">取消</button>
+                    <button class="button button-filled" :disabled="!$store.app.downloadEnabled"
+                        @click="$store.app.performDownload()">
+                        <i class="fas fa-download"></i> 我已了解，下载
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 未登录时显示登录卡片（含 Turnstile） -->
+        <template x-if="!$store.app.authenticated">
+            <div class="main-content" style="justify-content: center; align-items: center;">
+                <div class="card" style="max-width: 400px; width: 100%;">
+                    <div class="card-title">
+                        <i class="fas fa-lock"></i> 登录
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">邮箱</label>
+                        <input type="email" class="form-input" x-model="$store.app.email" placeholder="your@email.com">
+                    </div>
+                    <!-- Turnstile 容器 -->
+                    <div id="turnstile-container" class="form-group" style="min-height: 65px;"></div>
+                    <div class="button-group">
+                        <button class="button button-tonal" @click="$store.app.sendCode()"
+                            :disabled="$store.app.sendingCode || !$store.app.turnstileReady">
+                            <span x-show="!$store.app.sendingCode">发送验证码</span>
+                            <span x-show="$store.app.sendingCode">发送中...</span>
+                        </button>
+                    </div>
+                    <div class="form-group" x-show="$store.app.codeSent">
+                        <label class="form-label">验证码</label>
+                        <input type="text" class="form-input" x-model="$store.app.code" placeholder="6位数字">
+                    </div>
+                    <div class="button-group" x-show="$store.app.codeSent">
+                        <button class="button button-filled" @click="$store.app.verifyCode()"
+                            :disabled="$store.app.verifying">
+                            <span x-show="!$store.app.verifying">登录</span>
+                            <span x-show="$store.app.verifying">验证中...</span>
+                        </button>
+                    </div>
+                    <div class="status-indicator" x-show="$store.app.loginError">
+                        <span class="status-dot unavailable"></span>
+                        <span x-text="$store.app.loginError" style="color: var(--md-error);"></span>
+                    </div>
+                    <div class="status-indicator" x-show="$store.app.turnstileError">
+                        <span class="status-dot unavailable"></span>
+                        <span x-text="$store.app.turnstileError" style="color: var(--md-error);"></span>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- 已登录主界面（含退出按钮） -->
+        <template x-if="$store.app.authenticated">
+            <div style="display: flex; flex-direction: column; height: 100%;">
+                <!-- 应用栏，增加退出按钮 -->
+                <header class="app-bar">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div class="app-bar-title">
+                            <i class="fas fa-robot"></i> AI 应用生成器
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 16px;">
+                            <span class="app-bar-subtitle" x-text="$store.app.email"></span>
+                            <button class="button button-outline" style="padding: 8px 16px;"
+                                @click="$store.app.logout()">
+                                <i class="fas fa-sign-out-alt"></i> 退出
+                            </button>
+                        </div>
+                    </div>
+                </header>
+
+                <!-- 主要内容区（与之前相同） -->
+                <div class="main-content" style="flex-direction: row; gap: 24px; overflow: hidden;">
+                    <!-- 左侧边栏：任务列表和新建按钮 -->
+                    <div
+                        style="width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; overflow-y: auto;">
+                        <div class="card" style="padding: 16px;">
+                            <button class="button button-filled" style="width: 100%;"
+                                @click="$store.app.showNewTaskForm = true">
+                                <i class="fas fa-plus"></i> 新建应用
+                            </button>
+                        </div>
+                        <div class="card" style="flex: 1; overflow-y: auto; padding: 16px;">
+                            <div class="card-title" style="margin-bottom: 8px;">我的任务</div>
+                            <ul class="task-list">
+                                <template x-for="task in $store.app.tasks" :key="task.id">
+                                    <li class="task-item" @click="$store.app.selectTask(task.id)">
+                                        <div class="task-status" :class="task.status"></div>
+                                        <div class="task-info">
+                                            <!-- MODIFIED: 显示原始需求（去掉用户建议部分） -->
+                                            <div class="task-title"
+                                                x-text="$store.app.getDisplayRequirement(task.requirement).substring(0, 8) + ($store.app.getDisplayRequirement(task.requirement).length > 8 ? '...' : '')">
+                                            </div>
+                                            <div class="task-meta" x-text="new Date(task.createdAt).toLocaleString()">
+                                            </div>
+                                        </div>
+                                        <div class="task-progress">
+                                            <div class="task-progress-bar"
+                                                :style="'width: ' + (task.progress * 100) + '%'">
+                                            </div>
+                                        </div>
+                                    </li>
+                                </template>
+                                <li x-show="$store.app.tasks.length === 0" class="task-item"
+                                    style="justify-content: center;">暂无任务</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- 右侧内容区：新建表单 或 任务详情 -->
+                    <div style="flex: 1; overflow-y: auto;">
+                        <!-- 新建任务表单 -->
+                        <div x-show="$store.app.showNewTaskForm" class="card">
+                            <div class="card-title">
+                                <i class="fas fa-plus-circle"></i> 创建新应用
+                                <button class="button button-outline" style="margin-left: auto;"
+                                    @click="$store.app.showNewTaskForm = false">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                            <form @submit.prevent="$store.app.createTask()">
+                                <div class="form-group">
+                                    <label class="form-label">需求描述</label>
+                                    <textarea class="form-textarea" x-model="$store.app.newTask.requirement"
+                                        placeholder="例如：写一个公共聊天室" required></textarea>
+                                </div>
+
+                                <!-- MODIFIED: 新增选项区域 -->
+                                <div class="checkbox-group">
+
+                                    <div class="checkbox-item">
+                                        <input type="checkbox" id="noCloud" x-model="$store.app.newTask.noCloud">
+                                        <label for="noCloud" class="checkbox-label">不需要云端功能</label>
+                                    </div>
+                                    <div class="checkbox-item">
+                                        <input type="checkbox" id="noUserSystem"
+                                            x-model="$store.app.newTask.noUserSystem">
+                                        <label for="noUserSystem" class="checkbox-label">不需要用户系统</label>
+                                    </div>
+                                    <div class="checkbox-item">
+                                        <input type="checkbox" id="customStyle"
+                                            x-model="$store.app.newTask.customStyle">
+                                        <label for="customStyle" class="checkbox-label">需要独立的样式设计</label>
+                                    </div>
+                                    <div class="checkbox-note" x-show="$store.app.newTask.customStyle">
+                                        勾选此选项将显著增加应用生成时间和生成失败的概率
+                                    </div>
+                                    <br>
+                                    <div class="checkbox-item">
+                                        <input type="checkbox" id="sendEmail" x-model="$store.app.newTask.sendEmail">
+                                        <label for="sendEmail" class="checkbox-label">任务结束时发送邮件通知</label>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label class="form-label">API 密钥</label>
+                                    <input type="password" class="form-input" x-model="$store.app.newTask.apiKey"
+                                        placeholder="请输入密钥" required>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">应用图标 (1:1)</label>
+                                    <input type="file" class="form-input" accept="image/*"
+                                        @change="$store.app.handleIconUpload($event)">
+                                    <img x-show="$store.app.newTask.iconPreview" :src="$store.app.newTask.iconPreview"
+                                        class="image-preview">
+                                </div>
+                                <div class="button-group">
+                                    <button type="submit" class="button button-filled" :disabled="$store.app.creating">
+                                        <span x-show="!$store.app.creating">提交</span>
+                                        <span x-show="$store.app.creating">处理中...</span>
+                                    </button>
+                                    <button type="button" class="button button-outline"
+                                        @click="$store.app.showNewTaskForm = false">取消</button>
+                                </div>
+                                <div x-show="$store.app.createError" class="status-indicator" style="margin-top: 16px;">
+                                    <span class="status-dot unavailable"></span>
+                                    <span x-text="$store.app.createError" style="color: var(--md-error);"></span>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- 任务详情：仅当 currentTask 存在时渲染 -->
+                        <template x-if="!$store.app.showNewTaskForm && $store.app.currentTask">
+                            <div class="card">
+                                <div class="card-title">
+                                    <i class="fas fa-info-circle"></i> 任务详情
+                                </div>
+                                <div style="margin-bottom: 16px;">
+                                    <strong>需求：</strong>
+                                    <!-- MODIFIED: 显示原始需求 -->
+                                    <span
+                                        x-text="$store.app.getDisplayRequirement($store.app.currentTask.requirement)"></span>
+                                </div>
+                                <div style="margin-bottom: 16px;">
+                                    <strong>状态：</strong>
+                                    <span class="task-status" :class="$store.app.currentTask.status"
+                                        style="display: inline-block; vertical-align: middle;"></span>
+                                    <span x-text="$store.app.currentTask.status"></span>
+                                    <span x-show="$store.app.currentTask.progress" style="margin-left: 16px;">进度：<span
+                                            x-text="Math.round($store.app.currentTask.progress * 100) + '%'"></span></span>
+                                </div>
+                                <!-- 显示需求澄清消息（如果有） -->
+                                <div x-show="$store.app.currentTask.additionalInfo?.messageForUser"
+                                    class="progress-detail"
+                                    style="background: var(--md-primary-container); color: var(--md-on-primary-container);">
+                                    <i class="fas fa-info-circle" style="margin-right: 8px;"></i>
+                                    <strong>需求澄清消息：</strong> <span
+                                        x-text="$store.app.currentTask.additionalInfo?.messageForUser"></span>
+                                </div>
+                                <div class="progress-detail" x-show="$store.app.currentTask.message">
+                                    <div class="progress-message" x-text="$store.app.currentTask.message"></div>
+                                    <div class="task-progress">
+                                        <div class="task-progress-bar"
+                                            :style="'width: ' + ($store.app.currentTask.progress * 100) + '%'"></div>
+                                    </div>
+                                </div>
+
+                                <!-- 构建服务状态 -->
+                                <div style="margin-bottom: 16px; display: flex; align-items: center; gap: 16px;">
+                                    <div class="status-indicator">
+                                        <span class="status-dot"
+                                            :class="$store.app.buildServiceAvailable ? 'available' : 'unavailable'"></span>
+                                        构建服务
+                                    </div>
+                                    <button class="button button-outline" @click="$store.app.checkBuildService()">
+                                        <i class="fas fa-sync-alt"></i> 刷新
+                                    </button>
+                                </div>
+
+                                <!-- 源码下载 (只要源码可用) -->
+                                <div x-show="$store.app.sourceAvailable($store.app.currentTask)"
+                                    style="margin-top: 24px;">
+                                    <h3 style="font-size: var(--md-font-size-large); margin-bottom: 12px;">源码下载</h3>
+                                    <div class="button-group">
+                                        <a :href="'/api/tasks/' + $store.app.currentTask.id + '/download/source'"
+                                            class="button button-tonal" download>
+                                            <i class="fas fa-file-archive"></i> 源码 (.tar.gz)
+                                        </a>
+                                    </div>
+                                </div>
+
+                                <!-- 构建按钮 (只要源码可用且构建服务可用) -->
+                                <div x-show="$store.app.sourceAvailable($store.app.currentTask) && $store.app.buildServiceAvailable"
+                                    style="margin-top: 16px;">
+                                    <button class="button button-tonal"
+                                        @click="$store.app.triggerBuild($store.app.currentTask.id)">
+                                        <i class="fas fa-play"></i>
+                                        <span
+                                            x-text="$store.app.currentTask.status === 'completed' && $store.app.currentTask.buildResult?.success ? '重新构建' : '手动构建'"></span>
+                                    </button>
+                                </div>
+
+                                <!-- 可执行文件下载 (构建成功时) - 改为按钮弹出模态框 -->
+                                <div x-show="$store.app.currentTask.buildResult && $store.app.currentTask.buildResult.success"
+                                    style="margin-top: 24px;">
+                                    <h3 style="font-size: var(--md-font-size-large); margin-bottom: 12px;">可执行文件下载</h3>
+                                    <div class="button-group">
+                                        <button class="button button-filled"
+                                            @click="$store.app.openDownloadModal($store.app.currentTask.buildResult.fileURL)">
+                                            <i class="fas fa-download"></i> 下载可执行文件
+                                        </button>
+                                    </div>
+                                    <div style="margin-top: 12px; font-size: var(--md-font-size-small);">
+                                        有效期：<span
+                                            x-text="$store.app.currentTask.buildResult?.expiresIn ? (Math.round($store.app.currentTask.buildResult.expiresIn / 3600) + ' 小时') : '未知'"></span>
+                                        大小：<span
+                                            x-text="$store.app.currentTask.buildResult?.size ? (($store.app.currentTask.buildResult.size / 1024 / 1024).toFixed(2) + ' MB') : '未知'"></span>
+                                    </div>
+                                </div>
+
+                                <!-- 构建失败提示 (可选) -->
+                                <div x-show="$store.app.currentTask.buildResult && !$store.app.currentTask.buildResult.success"
+                                    style="margin-top: 16px; color: var(--md-error);">
+                                    构建失败，请检查错误信息或点击上方按钮重新构建。
+                                </div>
+
+                                <div x-show="$store.app.currentTask.status === 'failed' && $store.app.currentTask.error"
+                                    style="margin-top: 16px; color: var(--md-error);">
+                                    错误：<span x-text="$store.app.currentTask.error"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script>
+        // 等待所有资源加载完成后，隐藏初始加载遮罩并显示主内容
+        window.addEventListener('load', function () {
+            document.getElementById('initial-loader').style.display = 'none';
+            document.getElementById('app-content').style.display = 'block';
+        });
+
+        // 全局 Turnstile 回调（必须挂载在 window 上）
+        window.turnstileSuccessCallback = function (token) {
+            Alpine.store('app').setTurnstileToken(token);
+        };
+        window.turnstileErrorCallback = function (error) {
+            Alpine.store('app').setTurnstileError('人机验证失败，请重试');
+        };
+        window.turnstileExpiredCallback = function () {
+            Alpine.store('app').setTurnstileToken(null);
+            // 可选提示
+        };
+
+        document.addEventListener('alpine:init', () => {
+            Alpine.store('app', {
+                // ---------- 用户认证 ----------
+                authenticated: false,
+                email: '',
+                code: '',
+                codeSent: false,
+                sendingCode: false,
+                verifying: false,
+                loginError: '',
+
+                // ---------- 任务列表 ----------
+                tasks: [],
+                currentTask: null,
+                showNewTaskForm: false,
+                newTask: {
+                    requirement: '',
+                    apiKey: '',
+                    iconFile: null,
+                    iconPreview: '',
+                    // MODIFIED: 新增字段
+                    sendEmail: false,
+                    noCloud: false,
+                    noUserSystem: false,
+                    customStyle: false
+                },
+                creating: false,
+                createError: '',
+
+                // ---------- 构建服务状态 ----------
+                buildServiceAvailable: false,
+
+                // ---------- 全局加载 ----------
+                loading: false,
+                loadingMessage: '加载中...',
+
+                // ---------- Turnstile 相关 ----------
+                turnstileWidgetId: null,
+                turnstileToken: null,
+                turnstileReady: false,
+                turnstileError: '',
+
+                // MODIFIED: 下载模态框状态
+                downloadModalVisible: false,
+                downloadUrl: '',
+                downloadCountdown: 3,
+                downloadEnabled: false,
+                countdownInterval: null,
+
+                // ---------- 初始化 ----------
+                init() {
+                    // 从 localStorage 恢复邮箱（可选）
+                    const savedEmail = localStorage.getItem('appEmail');
+                    if (savedEmail) this.email = savedEmail;
+                    // 检查是否已有会话
+                    this.checkSession();
+                    // 尝试渲染 Turnstile（如果脚本已加载）
+                    this.initTurnstile();
+                },
+
+                // ---------- 工具方法：从完整需求中提取原始需求 ----------
+                getDisplayRequirement(fullRequirement) {
+                    if (!fullRequirement) return '';
+                    const parts = fullRequirement.split('===用户建议===');
+                    return parts[0].trim();
+                },
+
+                // ---------- Turnstile 初始化 ----------
+                initTurnstile() {
+                    // 先检查容器是否存在
+                    const container = document.getElementById('turnstile-container');
+                    if (!container) {
+                        // 容器未渲染，延迟重试
+                        setTimeout(() => this.initTurnstile(), 100);
+                        return;
+                    }
+                    // 再检查 turnstile 脚本是否加载完成
+                    if (typeof turnstile === 'undefined') {
+                        setTimeout(() => this.initTurnstile(), 200);
+                        return;
+                    }
+                    // 如果已经渲染过，先移除
+                    if (this.turnstileWidgetId) {
+                        turnstile.remove(this.turnstileWidgetId);
+                        this.turnstileWidgetId = null;
+                    }
+                    // 渲染 widget
+                    const widgetId = turnstile.render('#turnstile-container', {
+                        sitekey: '0x4AAAAAAA7naIFMD0lfcIcK',
+                        callback: window.turnstileSuccessCallback,
+                        'error-callback': window.turnstileErrorCallback,
+                        'expired-callback': window.turnstileExpiredCallback,
+                        theme: 'light'
+                    });
+                    this.turnstileWidgetId = widgetId;
+                    this.turnstileReady = true;
+                },
+
+                setTurnstileToken(token) {
+                    this.turnstileToken = token;
+                    this.turnstileError = '';
+                },
+
+                setTurnstileError(msg) {
+                    this.turnstileError = msg;
+                    this.turnstileToken = null;
+                },
+
+                // ---------- 工具方法 ----------
+                sourceAvailable(task) {
+                    return task && !['pending', 'clarifying', 'generating'].includes(task.status);
+                },
+
+                // 通用 fetch 封装，自动携带 cookie
+                async request(endpoint, options = {}) {
+                    const res = await fetch(endpoint, {
+                        ...options,
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...options.headers
+                        }
+                    });
+                    if (!res.ok) {
+                        const error = await res.json().catch(() => ({ error: '请求失败' }));
+                        throw new Error(error.error || `HTTP ${res.status}`);
+                    }
+                    return res;
+                },
+
+                // ---------- 认证相关 ----------
+                async checkSession() {
+                    try {
+                        const res = await this.request('/api/user/me');
+                        const data = await res.json();
+                        this.authenticated = true;
+                        this.email = data.email;
+                        localStorage.setItem('appEmail', this.email);
+                        this.loadTasks();
+                        this.checkBuildService();
+                    } catch (e) {
+                        this.authenticated = false;
+                    }
+                },
+
+                async sendCode() {
+                    if (!this.email) {
+                        this.loginError = '请输入邮箱';
+                        return;
+                    }
+                    if (!this.turnstileReady) {
+                        this.loginError = '人机验证初始化中，请稍后';
+                        return;
+                    }
+                    // 如果还没有 token，执行验证
+                    if (!this.turnstileToken) {
+                        if (this.turnstileWidgetId) {
+                            turnstile.execute(this.turnstileWidgetId);
+                            this.loginError = '请完成人机验证';
+                            return;
+                        } else {
+                            this.loginError = '人机验证未就绪';
+                            return;
+                        }
+                    }
+
+                    this.sendingCode = true;
+                    this.loginError = '';
+                    try {
+                        await this.request('/api/auth/send-code', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                email: this.email,
+                                turnstileToken: this.turnstileToken
+                            })
+                        });
+                        this.codeSent = true;
+                        // 验证成功后重置 Turnstile，以便下次重新验证
+                        if (this.turnstileWidgetId) {
+                            turnstile.reset(this.turnstileWidgetId);
+                            this.turnstileToken = null;
+                        }
+                    } catch (e) {
+                        this.loginError = e.message;
+                    } finally {
+                        this.sendingCode = false;
+                    }
+                },
+
+                async verifyCode() {
+                    if (!this.code) {
+                        this.loginError = '请输入验证码';
+                        return;
+                    }
+                    this.verifying = true;
+                    this.loginError = '';
+                    try {
+                        await this.request('/api/auth/verify', {
+                            method: 'POST',
+                            body: JSON.stringify({ email: this.email, code: this.code })
+                        });
+                        this.authenticated = true;
+                        localStorage.setItem('appEmail', this.email);
+                        this.loadTasks();
+                        this.checkBuildService();
+                    } catch (e) {
+                        this.loginError = e.message;
+                    } finally {
+                        this.verifying = false;
+                    }
+                },
+
+                async logout() {
+                    try {
+                        // 调用后端登出接口
+                        await this.request('/api/auth/logout', { method: 'POST' });
+                    } catch (e) {
+                        console.warn('登出失败', e);
+                    } finally {
+                        // 清除前端状态
+                        this.authenticated = false;
+                        this.email = '';
+                        this.code = '';
+                        this.codeSent = false;
+                        this.tasks = [];
+                        this.currentTask = null;
+                        localStorage.removeItem('appEmail');
+                        // 关闭 SSE 连接
+                        if (this.eventSource) {
+                            this.eventSource.close();
+                            this.eventSource = null;
+                        }
+                        // 重新初始化 Turnstile（下次登录时）
+                        this.turnstileToken = null;
+                        this.turnstileReady = false;
+                        this.initTurnstile();
+                    }
+                },
+
+                // ---------- 任务相关 ----------
+                async loadTasks() {
+                    // 记住当前选中的任务 ID（如果有）
+                    const currentId = this.currentTask?.id;
+
+                    // 发起请求获取最新任务列表
+                    const tasks = await fetch('/api/tasks').then(res => res.json());
+                    this.tasks = tasks;
+
+                    // 尝试恢复选中状态
+                    if (currentId) {
+                        const stillExist = tasks.find(t => t.id === currentId);
+                        if (stillExist) {
+                            // 如果原选中任务仍在列表中，重新设置为 currentTask
+                            this.currentTask = stillExist;
+                        } else {
+                            // 如果原任务已被删除，可选：清空或选中第一个
+                            this.currentTask = tasks[0] || null;
+                        }
+                    } else {
+                        // 之前没有选中任何任务，可选选中第一个
+                        this.currentTask = tasks[0] || null;
+                    }
+                },
+
+                selectTask(taskId) {
+                    const task = this.tasks.find(t => t.id === taskId);
+                    if (task) {
+                        this.currentTask = { ...task };
+                        this.showNewTaskForm = false;
+                        this.listenTaskProgress(taskId);
+                    }
+                },
+
+                listenTaskProgress(taskId) {
+                    // 1. 清除任何待执行的重连定时器（防止旧的定时器再次创建连接）
+                    if (this.reconnectTimer) {
+                        clearTimeout(this.reconnectTimer);
+                        this.reconnectTimer = null;
+                    }
+
+                    // 2. 关闭并清理现有的 EventSource 连接
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                        this.eventSource = null;
+                    }
+
+                    // 定义连接函数，内部使用闭包捕获 taskId 和当前 EventSource 实例
+                    const connect = () => {
+                        const es = new EventSource(`/api/tasks/${taskId}/progress`);
+
+                        // 立即将新建的实例赋值给组件属性，便于外部访问和清理
+                        this.eventSource = es;
+
+                        // 消息处理
+                        es.onmessage = (event) => {
+                            try {
+                                const data = JSON.parse(event.data);
+
+                                // 进度达到 1 时刷新任务列表
+                                if (data.progress === 1 && this.currentTask.progress !== 1) {
+                                    this.loadTasks();
+                                }
+
+                                // 更新当前选中任务（如果有且匹配）
+                                if (this.currentTask && this.currentTask.id === taskId) {
+                                    Object.assign(this.currentTask, data);
+                                }
+
+                                // 更新任务列表中的对应项
+                                const index = this.tasks.findIndex(t => t.id === taskId);
+                                if (index !== -1) {
+                                    Object.assign(this.tasks[index], data);
+                                }
+                            } catch (e) {
+                                console.error('解析进度消息失败', e);
+                            }
+                        };
+
+                        // 错误处理（连接断开、超时等）
+                        es.onerror = () => {
+                            // 关键检查：如果当前组件的 eventSource 已经不是当前这个 es，说明已经被新的连接替换，忽略本次错误
+                            if (this.eventSource !== es) return;
+
+                            // 关闭出错的连接
+                            es.close();
+                            this.eventSource = null;
+
+                            // 如果任务已完成（progress === 1），不再重连
+                            if (this.currentTask?.progress === 1) return;
+
+                            // 清除可能残留的定时器（双重保障）
+                            if (this.reconnectTimer) {
+                                clearTimeout(this.reconnectTimer);
+                                this.reconnectTimer = null;
+                            }
+
+                            // 5秒后尝试重连，但仅当当前选中的任务仍然是同一个任务
+                            this.reconnectTimer = setTimeout(() => {
+                                if (this.currentTask && this.currentTask.id === taskId) {
+                                    connect();
+                                }
+                                this.reconnectTimer = null; // 定时器执行后置空
+                            }, 5000);
+                        };
+                    };
+
+                    // 启动连接
+                    connect();
+                },
+
+                // 组件销毁时彻底清理，防止内存泄漏
+                beforeDestroy() {
+                    if (this.reconnectTimer) {
+                        clearTimeout(this.reconnectTimer);
+                        this.reconnectTimer = null;
+                    }
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                        this.eventSource = null;
+                    }
+                    // MODIFIED: 清理下载倒计时
+                    if (this.countdownInterval) {
+                        clearInterval(this.countdownInterval);
+                        this.countdownInterval = null;
+                    }
+                },
+
+                // ---------- 构建服务 ----------
+                async checkBuildService() {
+                    try {
+                        const res = await this.request('/api/build-service/status');
+                        const data = await res.json();
+                        this.buildServiceAvailable = data.available;
+                    } catch (e) {
+                        this.buildServiceAvailable = false;
+                    }
+                },
+
+                // ---------- 图标处理 ----------
+                handleIconUpload(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    if (!file.type.startsWith('image/')) {
+                        this.createError = '请选择图片文件';
+                        return;
+                    }
+                    // 创建预览
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        this.newTask.iconPreview = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+
+                    // 裁剪为 1024x1024 并保存为 File
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = 1024;
+                        canvas.height = 1024;
+                        const ctx = canvas.getContext('2d');
+                        const scale = Math.max(1024 / img.width, 1024 / img.height);
+                        const dx = (1024 - img.width * scale) / 2;
+                        const dy = (1024 - img.height * scale) / 2;
+                        ctx.drawImage(img, dx, dy, img.width * scale, img.height * scale);
+                        canvas.toBlob((blob) => {
+                            const croppedFile = new File([blob], 'icon.png', { type: 'image/png' });
+                            this.newTask.iconFile = croppedFile;
+                        }, 'image/png');
+                    };
+                    img.src = URL.createObjectURL(file);
+                },
+
+                // ---------- 创建任务 ----------
+                async createTask() {
+                    if (!this.newTask.requirement || !this.newTask.apiKey || !this.newTask.iconFile) {
+                        this.createError = '请填写所有字段并上传图标';
+                        return;
+                    }
+                    this.creating = true;
+                    this.createError = '';
+
+                    // MODIFIED: 根据选项构建完整需求
+                    let fullRequirement = this.newTask.requirement;
+                    const suggestions = [];
+                    if (this.newTask.noCloud) suggestions.push('不需要云端功能');
+                    if (this.newTask.noUserSystem) suggestions.push('不需要用户系统');
+                    if (this.newTask.customStyle) suggestions.push('不使用Bootstrap 5，独立设计样式');
+                    if (suggestions.length > 0) {
+                        fullRequirement += '\n===用户建议===\n' + suggestions.join('\n');
+                    }
+
+                    const formData = new FormData();
+                    formData.append('requirement', fullRequirement);
+                    formData.append('apiKey', this.newTask.apiKey);
+                    formData.append('icon', this.newTask.iconFile);
+                    // 新增 sendEmail 字段
+                    formData.append('sendEmail', this.newTask.sendEmail ? 'true' : 'false');
+
+                    try {
+                        const res = await fetch('/api/tasks', {
+                            method: 'POST',
+                            body: formData,
+                            credentials: 'same-origin'
+                        });
+                        if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            throw new Error(err.error || '创建失败');
+                        }
+                        const data = await res.json();
+                        const newTask = {
+                            id: data.taskId,
+                            requirement: fullRequirement, // 后端会返回完整需求，此处使用 fullRequirement 便于预览
+                            status: 'pending',
+                            progress: 0,
+                            message: '任务已创建',
+                            createdAt: new Date().toISOString()
+                        };
+                        this.tasks.unshift(newTask);
+                        this.selectTask(data.taskId);
+                        this.showNewTaskForm = false;
+                        // 重置表单，保留默认值
+                        this.newTask = { requirement: '', apiKey: '', iconFile: null, iconPreview: '', sendEmail: false, noCloud: false, noUserSystem: false, customStyle: false };
+                    } catch (e) {
+                        this.createError = e.message;
+                    } finally {
+                        this.creating = false;
+                    }
+                },
+
+                // ---------- 手动触发构建 ----------
+                async triggerBuild(taskId) {
+                    this.loading = true;
+                    this.loadingMessage = '正在触发构建...';
+                    try {
+                        await this.request(`/api/tasks/${taskId}/build`, { method: 'POST' });
+                        this.loadTasks();
+                    } catch (e) {
+                        alert(e.message);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                // MODIFIED: 下载模态框方法
+                openDownloadModal(url) {
+                    this.downloadUrl = url;
+                    this.downloadModalVisible = true;
+                    this.downloadCountdown = 3;
+                    this.downloadEnabled = false;
+
+                    // 清除之前的定时器
+                    if (this.countdownInterval) {
+                        clearInterval(this.countdownInterval);
+                    }
+
+                    // 启动倒计时
+                    this.countdownInterval = setInterval(() => {
+                        if (this.downloadCountdown > 1) {
+                            this.downloadCountdown -= 1;
+                        } else {
+                            this.downloadCountdown = 0;
+                            this.downloadEnabled = true;
+                            clearInterval(this.countdownInterval);
+                            this.countdownInterval = null;
+                        }
+                    }, 1000);
+                },
+
+                closeDownloadModal() {
+                    this.downloadModalVisible = false;
+                    this.downloadUrl = '';
+                    this.downloadCountdown = 3;
+                    this.downloadEnabled = false;
+                    if (this.countdownInterval) {
+                        clearInterval(this.countdownInterval);
+                        this.countdownInterval = null;
+                    }
+                },
+
+                performDownload() {
+                    if (this.downloadUrl) {
+                        location.href = this.downloadUrl;
+                    }
+                    this.closeDownloadModal();
+                }
+            });
+
+            // 主 Alpine 组件（空，用于绑定全局）
+            Alpine.data('app', () => ({}));
+        });
+    </script>
+</body>
+
+</html>
